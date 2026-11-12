@@ -1,0 +1,10 @@
+# 빌드 산출물
+/dist/
+*.app/
+
+# OS / 에디터
+.DS_Store
+*.swp
+
+# 로컬 접속정보(자격증명) — 앱이 os.UserConfigDir()/xmview 에 저장하므로 저장소에는 올리지 않음
+connections.json
