@@ -24,6 +24,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -42,16 +43,8 @@ type profile struct {
 	Channels string `json:"channels"`
 }
 
-func dataDir() string {
-	base, err := os.UserConfigDir()
-	if err != nil || base == "" {
-		return "."
-	}
-	d := filepath.Join(base, "xmview")
-	_ = os.MkdirAll(d, 0755)
-	return d
-}
-func profilePath() string { return filepath.Join(dataDir(), "connections.json") }
+// 접속정보는 앱 데이터 폴더에 둔다(core.DataDir 과 같은 위치를 쓴다).
+func profilePath() string { return filepath.Join(core.DataDir(), "connections.json") }
 
 func loadProfiles() []profile {
 	b, err := os.ReadFile(profilePath())
@@ -173,7 +166,19 @@ func main() {
 		setPanel(!leftPanel.Visible())
 	})
 
+	// startStreams 는 ffmpeg 가 준비된 뒤 실제로 스트림을 띄운다.
+	var startStreams func()
+
 	connect := func() {
+		if strings.TrimSpace(host.Text) == "" {
+			status.SetText("주소를 입력하세요")
+			return
+		}
+		// ffmpeg 없이 연결하면 화면이 영원히 비어 있으므로 먼저 확보한다.
+		ensureFFmpeg(w, status, startStreams)
+	}
+
+	startStreams = func() {
 		p := curProfile()
 		if p.Host == "" {
 			status.SetText("주소를 입력하세요")
@@ -264,12 +269,92 @@ func main() {
 		savedSel.SetSelected(ps[0].Name)
 	}
 
+	// ffmpeg 가 없으면 연결을 눌렀을 때 자동 설치를 제안하므로, 미리 알려만 둔다.
+	if core.HaveFFmpeg() {
+		status.SetText("대기 중")
+	} else if core.FFmpegInstallable() {
+		status.SetText("대기 중 — 연결 시 ffmpeg 를 자동 설치합니다")
+	} else {
+		status.SetText("대기 중 — ffmpeg 필요: " + core.FFmpegManualHint())
+	}
+
 	content := container.NewBorder(topBar, nil, leftPanel, nil, grid)
 	w.SetContent(content)
 	w.ShowAndRun()
 }
 
 func layoutSpacer() fyne.CanvasObject { return canvas.NewRectangle(nil) }
+
+// ensureFFmpeg 는 ffmpeg 가 준비됐는지 확인하고, 없으면 자동 설치를 제안한다.
+// 준비가 끝나면 onReady 를 호출한다. 준비되지 않으면 호출하지 않는다.
+//
+// ffmpeg 는 라이선스 때문에 동봉할 수 없어 처음 한 번만 내려받는다.
+// 인터넷에서 실행파일을 받아오는 일이므로 사용자에게 출처와 크기를 보여주고
+// 동의를 받은 뒤에만 진행한다(자동으로 몰래 받지 않는다).
+func ensureFFmpeg(w fyne.Window, status *widget.Label, onReady func()) {
+	if core.HaveFFmpeg() {
+		onReady()
+		return
+	}
+
+	if !core.FFmpegInstallable() {
+		dialog.ShowInformation("ffmpeg 필요",
+			"영상 디코딩에 ffmpeg 가 필요합니다.\n\n"+core.FFmpegManualHint(), w)
+		status.SetText("ffmpeg 없음 — " + core.FFmpegManualHint())
+		return
+	}
+
+	origin, size, _ := core.FFmpegInstallInfo()
+	msg := fmt.Sprintf(
+		"영상 디코딩에 ffmpeg 가 필요하지만 설치돼 있지 않습니다.\n\n"+
+			"지금 자동으로 받아올까요?\n\n"+
+			"출처: %s\n크기: %s (처음 한 번만)\n내려받은 파일은 SHA-256 으로 검증합니다.",
+		origin, core.HumanSize(size))
+
+	dialog.ShowConfirm("ffmpeg 자동 설치", msg, func(ok bool) {
+		if !ok {
+			status.SetText("ffmpeg 없음 — 설치해야 영상이 나옵니다")
+			return
+		}
+		runFFmpegInstall(w, status, onReady)
+	}, w)
+}
+
+// runFFmpegInstall 은 진행률 창을 띄우고 백그라운드에서 설치한다.
+func runFFmpegInstall(w fyne.Window, status *widget.Label, onReady func()) {
+	bar := widget.NewProgressBar()
+	phase := widget.NewLabel("시작 중…")
+	prog := dialog.NewCustomWithoutButtons("ffmpeg 설치 중",
+		container.NewVBox(phase, bar), w)
+	prog.Show()
+
+	go func() {
+		_, err := core.InstallFFmpeg(func(ph string, done, total int64) {
+			// UI 갱신은 메인 스레드에서만 해야 한다.
+			fyne.Do(func() {
+				phase.SetText(fmt.Sprintf("%s  %s / %s",
+					ph, core.HumanSize(done), core.HumanSize(total)))
+				if total > 0 {
+					bar.SetValue(float64(done) / float64(total))
+				}
+			})
+		})
+
+		fyne.Do(func() {
+			prog.Hide()
+			if err != nil {
+				dialog.ShowError(
+					fmt.Errorf("ffmpeg 설치 실패: %w\n\n수동 설치: %s", err, core.FFmpegManualHint()), w)
+				status.SetText("ffmpeg 설치 실패")
+				return
+			}
+			// 설치된 경로를 쓰도록 도구 경로를 다시 해석한다.
+			core.ResolveTools()
+			status.SetText("ffmpeg 설치 완료")
+			onReady()
+		})
+	}()
+}
 
 // runTile: 한 채널의 프레임을 받아 네이티브 이미지로 그린다.
 // Fyne 는 UI 갱신을 메인 스레드에서 해야 하므로 fyne.Do 로 전달한다.

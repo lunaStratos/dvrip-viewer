@@ -14,9 +14,21 @@ Xiongmai(XM) 계열 DVR/NVR/IPC(미라클·XMEye·이지피스 등)에 **DVRIP �
 
 ## 요구사항
 - **ffmpeg** (영상 디코딩용)
+  - **Windows: 설치 불필요** — 연결할 때 앱이 자동으로 받아온다(아래 참고)
   - macOS: `brew install ffmpeg`
-  - Windows: [gyan.dev full 빌드](https://www.gyan.dev/ffmpeg/builds/)를 PATH 에 넣거나 `ffmpeg.exe`를 실행파일과 같은 폴더에 둠
 - 빌드 시: **Go 1.21+**, C 컴파일러(CGO, OpenGL 필요)
+
+### ffmpeg 자동 설치 (Windows)
+ffmpeg 가 없으면 **연결** 버튼을 누를 때 출처와 크기를 보여주고 받아올지 묻는다.
+동의하면 한 번만 내려받아 `%AppData%\xmview\bin\ffmpeg.exe` 에 둔다.
+
+- 출처는 [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) 의 **버전 고정** 패키지(약 109MB)
+- 내려받은 파일은 **SHA-256 으로 검증**하고, 불일치하면 쓰지 않고 버린다
+- 몰래 받지 않는다 — 항상 사용자 동의를 먼저 구한다
+
+ffmpeg 를 앱에 동봉하지 않는 이유는 라이선스(GPL/LGPL)다. 런타임 다운로드는
+재배포가 아니므로 배포 의무가 생기지 않는다. 이미 ffmpeg 가 PATH 에 있거나
+실행파일과 같은 폴더에 있으면 그것을 그대로 쓴다.
 
 ## 빌드 / 실행
 

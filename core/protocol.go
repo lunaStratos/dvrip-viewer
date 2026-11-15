@@ -17,9 +17,9 @@ import (
 
 // ---- DVRIP 메시지 ID ----
 const (
-	msgLoginReq    = 1000 // 로그인 요청
-	msgLoginResp   = 1001
-	msgKeepAlive   = 1006
+	msgLoginReq     = 1000 // 로그인 요청
+	msgLoginResp    = 1001
+	msgKeepAlive    = 1006
 	msgMonitorClaim = 1413 // OPMonitor Claim
 	msgMonitorStart = 1410 // OPMonitor Start
 	msgMonitorData  = 1412 // 실시간 영상 데이터
