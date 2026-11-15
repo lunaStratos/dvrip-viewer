@@ -28,13 +28,20 @@ Xiongmai(XM) 계열 DVR/NVR/IPC(미라클·XMEye·이지피스 등)에 **DVRIP �
 접속정보 저장 위치: `~/Library/Application Support/xmview/connections.json`
 
 ### Windows
-윈도우 PC에서 빌드(CGO + OpenGL 필요):
+**받아서 쓰기(권장)** — 직접 빌드할 필요가 없다.
+[Releases](../../releases) 에서 `XMView.exe` 를 받거나,
+[Actions](../../actions) 의 최신 빌드에서 `XMView-windows-x64` 아티팩트를 받는다.
+(GitHub Actions 가 윈도우 러너에서 매 푸시마다 빌드한다.)
+
+**직접 빌드** — 윈도우 PC 에서(CGO + OpenGL 필요):
 ```bat
 : Go 와 TDM-GCC(또는 MSYS2 mingw) 설치 후
 set CGO_ENABLED=1
-go mod tidy
-go build -ldflags "-H=windowsgui -s -w" -o xmview.exe .
+go build -ldflags "-H=windowsgui -s -w" -o XMView.exe .
 ```
+Fyne 가 CGO 를 쓰므로 맥에서 `GOOS=windows` 만으로는 크로스컴파일되지 않는다.
+윈도우용 C 컴파일러(mingw-w64)가 있으면 맥에서도 가능하지만, 위의 Actions 쪽이 확실하다.
+
 접속정보 저장 위치: `%AppData%\xmview\connections.json`
 ffmpeg.exe 는 PATH 또는 실행파일과 같은 폴더에 둔다.
 

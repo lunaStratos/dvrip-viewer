@@ -1,0 +1,111 @@
+name: build
+
+# main 푸시·PR 에서 빌드를 확인하고, v* 태그를 밀면 Release 에 바이너리를 첨부한다.
+# 수동 실행(workflow_dispatch)도 가능하다.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Fyne 는 CGO + OpenGL 을 쓴다. windows-latest 이미지에는 mingw-w64 gcc 가
+      # 포함돼 있으므로 별도 설치 없이 빌드된다. 버전을 찍어 둬서 이미지가
+      # 바뀌어 gcc 가 사라지면 이 단계에서 바로 드러나게 한다.
+      - name: C 컴파일러 확인
+        run: gcc --version
+
+      - name: go vet
+        env:
+          CGO_ENABLED: 1
+        run: go vet ./...
+
+      - name: 빌드 (-H=windowsgui → 콘솔 창 숨김)
+        env:
+          CGO_ENABLED: 1
+        run: go build -ldflags "-H=windowsgui -s -w" -o dist/XMView.exe .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XMView-windows-x64
+          path: dist/XMView.exe
+          if-no-files-found: error
+
+  macos:
+    name: macOS (Apple Silicon)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      # build.sh 가 네이티브 빌드 + .icns 생성 + .app 번들까지 처리한다.
+      - name: 빌드 (.app 번들)
+        run: ./build.sh
+
+      # .app 은 디렉토리이므로 ditto 로 압축해 번들 구조와 실행 권한을 보존한다.
+      # upload-artifact 는 실행 비트를 유지하지 않으므로 zip 으로 올린다.
+      - name: .app 압축
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            dist/XMView-Native.app dist/XMView-macos-arm64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XMView-macos-arm64
+          path: dist/XMView-macos-arm64.zip
+          if-no-files-found: error
+
+  release:
+    name: Release 첨부
+    # 태그를 밀었을 때만 동작한다.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          body: |
+            ## 설치
+
+            **Windows**: `XMView.exe` 를 받아 실행합니다.
+            **macOS (Apple Silicon)**: `XMView-macos-arm64.zip` 을 풀고 `XMView-Native.app` 을 실행합니다.
+            처음 실행 시 Gatekeeper 경고가 뜨면 우클릭 → 열기 를 선택하세요.
+
+            ## 사전 요구: ffmpeg
+
+            영상 디코딩에 `ffmpeg` 가 필요합니다. 라이선스 문제로 번들하지 않습니다.
+
+            - Windows: [gyan.dev full 빌드](https://www.gyan.dev/ffmpeg/builds/)를 PATH 에 넣거나
+              `ffmpeg.exe` 를 `XMView.exe` 와 같은 폴더에 둡니다.
+            - macOS: `brew install ffmpeg`
