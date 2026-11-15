@@ -127,7 +127,7 @@ func installFrom(src ffmpegSource, dir string, progress func(phase string, done,
 	}
 
 	// 1) 내려받으면서 동시에 해시를 계산한다(메모리에 다 담지 않는다).
-	report("다운로드 중", 0, src.Size)
+	report(PhaseDownload, 0, src.Size)
 	tmpZip, err := os.CreateTemp(dir, "ffmpeg-*.zip.part")
 	if err != nil {
 		return "", fmt.Errorf("임시 파일 생성 실패: %w", err)
@@ -154,7 +154,7 @@ func installFrom(src ffmpegSource, dir string, progress func(phase string, done,
 	}
 	hasher := sha256.New()
 	counter := &progressWriter{total: total, report: func(done int64) {
-		report("다운로드 중", done, total)
+		report(PhaseDownload, done, total)
 	}}
 	if _, err := io.Copy(tmpZip, io.TeeReader(resp.Body, io.MultiWriter(hasher, counter))); err != nil {
 		return "", fmt.Errorf("다운로드 중 끊김: %w", err)
@@ -164,7 +164,7 @@ func installFrom(src ffmpegSource, dir string, progress func(phase string, done,
 	}
 
 	// 2) 무결성 검증. 불일치하면 쓰지 않고 버린다.
-	report("검증 중", total, total)
+	report(PhaseVerify, total, total)
 	got := hex.EncodeToString(hasher.Sum(nil))
 	if got != src.SHA256 {
 		return "", fmt.Errorf(
@@ -173,13 +173,13 @@ func installFrom(src ffmpegSource, dir string, progress func(phase string, done,
 	}
 
 	// 3) zip 에서 필요한 실행파일 하나만 꺼낸다.
-	report("압축 해제 중", total, total)
+	report(PhaseExtract, total, total)
 	if err := extractZipEntry(tmpName, src.Entry, final); err != nil {
 		return "", err
 	}
 
 	FFmpegBin = final
-	report("완료", total, total)
+	report(PhaseDone, total, total)
 	return final, nil
 }
 
@@ -281,3 +281,11 @@ func HaveFFmpeg() bool {
 	_, err := exec.LookPath(FFmpegBin)
 	return err == nil
 }
+
+// InstallFFmpeg 진행 콜백의 단계 값. UI 가 언어별 문구로 바꿔 보여준다.
+const (
+	PhaseDownload = "download"
+	PhaseVerify   = "verify"
+	PhaseExtract  = "extract"
+	PhaseDone     = "done"
+)

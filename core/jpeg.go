@@ -21,6 +21,7 @@ func StreamJPEG(stop <-chan struct{}, host string, port int, user, pass string, 
 		"-f", "hevc", "-i", "-",
 		"-r", "12", "-vf", "scale=640:-2", "-q:v", "6",
 		"-f", "image2pipe", "-vcodec", "mjpeg", "-")
+	hideConsole(ff)
 	ff.Stdin = pr
 	out, err := ff.StdoutPipe()
 	if err != nil {

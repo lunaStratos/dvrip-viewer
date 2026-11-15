@@ -14,6 +14,7 @@ import (
 	_ "image/jpeg"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,37 +61,112 @@ func saveProfiles(ps []profile) {
 	os.WriteFile(profilePath(), b, 0600)
 }
 
+// viewer 는 창 하나의 상태다.
+//
+// 언어를 바꾸면 컨트롤(폼·버튼·상태줄)만 새로 만든다(build). 영상 그리드와
+// 실행 중인 스트림은 그대로 두어 언어를 바꿔도 영상이 끊기지 않는다.
+// 그래서 입력값·패널 상태·상태 메시지는 위젯이 아니라 여기에 보관한다.
+type viewer struct {
+	a   fyne.App
+	w   fyne.Window
+	cfg settings
+
+	grid   *fyne.Container
+	stopMu sync.Mutex
+	stopCh chan struct{}
+
+	// build 사이에 유지하는 값
+	form        profile
+	streamExtra bool
+	panelHidden bool
+	savedName   string
+	statusMsg   msg
+
+	// 현재 build 가 만든 것
+	status       *widget.Label
+	captureForm  func()
+	startStreams func()
+}
+
 func main() {
 	core.ResolveTools()
 
+	cfg := loadSettings()
+	setLanguage(cfg.Lang)
+
 	a := app.New()
+	a.Settings().SetTheme(&appTheme{mode: cfg.Theme})
 	icon := fyne.NewStaticResource("icon.png", iconPNG)
 	a.SetIcon(icon)
-	w := a.NewWindow("XMView — CCTV 뷰어")
+	w := a.NewWindow(T("app.title"))
 	w.SetIcon(icon)
 	w.Resize(fyne.NewSize(1180, 780))
 
+	v := &viewer{
+		a: a, w: w, cfg: cfg,
+		grid: container.NewGridWithColumns(2),
+		form: profile{Port: 34567, User: "admin", Channels: "0,1,2,3"},
+	}
+	if ps := loadProfiles(); len(ps) > 0 {
+		v.form = ps[0]
+		v.savedName = ps[0].Name
+	}
+
+	// ffmpeg 가 없으면 연결을 눌렀을 때 자동 설치를 제안하므로, 미리 알려만 둔다.
+	switch {
+	case core.HaveFFmpeg():
+		v.statusMsg = m("status.idle")
+	case core.FFmpegInstallable():
+		v.statusMsg = m("status.idleAutoInstall")
+	default:
+		v.statusMsg = m("status.idleNeedFF", manualHint())
+	}
+
+	v.build()
+	w.ShowAndRun()
+}
+
+// setStatus 는 상태줄을 바꾼다. 언어를 바꿔도 다시 번역되도록 키로 보관한다.
+func (v *viewer) setStatus(key string, args ...any) {
+	v.statusMsg = m(key, args...)
+	if v.status != nil {
+		v.status.SetText(T(key, args...))
+	}
+}
+
+// build 는 현재 언어로 컨트롤을 만들어 창에 올린다.
+func (v *viewer) build() {
+	if v.captureForm != nil {
+		v.captureForm() // 이전 화면에서 입력 중이던 값 보존
+	}
+	v.w.SetTitle(T("app.title"))
+
 	// ---- 입력 폼 ----
 	name := widget.NewEntry()
-	name.SetPlaceHolder("이름(저장용)")
+	name.SetPlaceHolder(T("ph.name"))
 	host := widget.NewEntry()
-	host.SetPlaceHolder("IP 또는 도메인")
+	host.SetPlaceHolder(T("ph.host"))
 	port := widget.NewEntry()
-	port.SetText("34567")
 	user := widget.NewEntry()
-	user.SetText("admin")
 	pass := widget.NewPasswordEntry()
-	pass.SetPlaceHolder("비밀번호")
+	pass.SetPlaceHolder(T("ph.pass"))
 	channels := widget.NewEntry()
-	channels.SetText("0,1,2,3")
-	streamSel := widget.NewSelect([]string{"Main(고화질)", "Extra1(저지연)"}, nil)
-	streamSel.SetSelected("Main(고화질)")
-	status := widget.NewLabel("대기 중")
+	streamOpts := []string{T("stream.main"), T("stream.extra")}
+	streamSel := widget.NewSelect(streamOpts, nil)
+	if v.streamExtra {
+		streamSel.SetSelectedIndex(1)
+	} else {
+		streamSel.SetSelectedIndex(0)
+	}
+	v.status = widget.NewLabel(T(v.statusMsg.key, v.statusMsg.args...))
 
 	fillForm := func(p profile) {
 		name.SetText(p.Name)
 		host.SetText(p.Host)
-		port.SetText(strconv.Itoa(p.Port))
+		port.SetText("")
+		if p.Port != 0 {
+			port.SetText(strconv.Itoa(p.Port))
+		}
 		user.SetText(p.User)
 		pass.SetText(p.Pass)
 		channels.SetText(p.Channels)
@@ -106,6 +182,7 @@ func main() {
 			Channels: strings.TrimSpace(channels.Text),
 		}
 	}
+	fillForm(v.form)
 
 	var savedSel *widget.Select
 	refreshSaved := func() {
@@ -120,68 +197,57 @@ func main() {
 	savedSel = widget.NewSelect(nil, func(sel string) {
 		for _, p := range loadProfiles() {
 			if p.Name == sel {
+				v.savedName = sel
 				fillForm(p)
 				return
 			}
 		}
 	})
-	savedSel.PlaceHolder = "저장된 접속 선택"
+	savedSel.PlaceHolder = T("ph.saved")
+	refreshSaved()
+	// SetSelected 는 콜백을 불러 입력 중이던 값을 덮어쓰므로 직접 지정한다.
+	savedSel.Selected = v.savedName
+	savedSel.Refresh()
 
-	// ---- 영상 그리드 ----
-	grid := container.NewGridWithColumns(2)
-	var stopMu sync.Mutex
-	var stopCh chan struct{}
-
-	streamType := func() string {
-		if strings.HasPrefix(streamSel.Selected, "Extra1") {
-			return "Extra1"
-		}
-		return "Main"
+	v.captureForm = func() {
+		v.form = curProfile()
+		v.form.Port, _ = strconv.Atoi(strings.TrimSpace(port.Text)) // 빈 값은 빈 값으로 보존
+		v.streamExtra = streamSel.SelectedIndex() == 1
 	}
 
 	// 좌측 설정 패널(접기 가능)
 	form := widget.NewForm(
-		widget.NewFormItem("이름", name),
-		widget.NewFormItem("주소", host),
-		widget.NewFormItem("포트", port),
-		widget.NewFormItem("아이디", user),
-		widget.NewFormItem("비밀번호", pass),
-		widget.NewFormItem("채널", channels),
-		widget.NewFormItem("스트림", streamSel),
-		widget.NewFormItem("저장목록", savedSel),
+		widget.NewFormItem(T("field.name"), name),
+		widget.NewFormItem(T("field.host"), host),
+		widget.NewFormItem(T("field.port"), port),
+		widget.NewFormItem(T("field.user"), user),
+		widget.NewFormItem(T("field.pass"), pass),
+		widget.NewFormItem(T("field.channels"), channels),
+		widget.NewFormItem(T("field.stream"), streamSel),
+		widget.NewFormItem(T("field.saved"), savedSel),
 	)
 
 	var leftPanel *fyne.Container
 	var toggleBtn *widget.Button
 	setPanel := func(show bool) {
+		v.panelHidden = !show
 		if show {
 			leftPanel.Show()
-			toggleBtn.SetText("◀ 설정 숨기기")
+			toggleBtn.SetText(T("btn.panelHide"))
 		} else {
 			leftPanel.Hide()
-			toggleBtn.SetText("▶ 설정")
+			toggleBtn.SetText(T("btn.panelShow"))
 		}
 	}
-	toggleBtn = widget.NewButtonWithIcon("◀ 설정 숨기기", theme.MenuIcon(), func() {
+	toggleBtn = widget.NewButtonWithIcon("", theme.MenuIcon(), func() {
 		setPanel(!leftPanel.Visible())
 	})
+	prefsBtn := widget.NewButtonWithIcon(T("btn.prefs"), theme.SettingsIcon(), v.showPrefs)
 
-	// startStreams 는 ffmpeg 가 준비된 뒤 실제로 스트림을 띄운다.
-	var startStreams func()
-
-	connect := func() {
-		if strings.TrimSpace(host.Text) == "" {
-			status.SetText("주소를 입력하세요")
-			return
-		}
-		// ffmpeg 없이 연결하면 화면이 영원히 비어 있으므로 먼저 확보한다.
-		ensureFFmpeg(w, status, startStreams)
-	}
-
-	startStreams = func() {
+	v.startStreams = func() {
 		p := curProfile()
 		if p.Host == "" {
-			status.SetText("주소를 입력하세요")
+			v.setStatus("status.needHost")
 			return
 		}
 		var chans []int
@@ -192,32 +258,35 @@ func main() {
 			}
 			n, err := strconv.Atoi(s)
 			if err != nil {
-				status.SetText("채널 목록 오류: " + s)
+				v.setStatus("status.badChannel", s)
 				return
 			}
 			chans = append(chans, n)
 		}
 		if len(chans) == 0 {
-			status.SetText("채널을 입력하세요")
+			v.setStatus("status.needChannel")
 			return
 		}
 
 		// 이전 세션 중단
-		stopMu.Lock()
-		if stopCh != nil {
-			close(stopCh)
+		v.stopMu.Lock()
+		if v.stopCh != nil {
+			close(v.stopCh)
 		}
-		stopCh = make(chan struct{})
-		myStop := stopCh
-		stopMu.Unlock()
+		v.stopCh = make(chan struct{})
+		myStop := v.stopCh
+		v.stopMu.Unlock()
 
 		cols := 2
 		if len(chans) <= 1 {
 			cols = 1
 		}
-		grid.Layout = container.NewGridWithColumns(cols).Layout
-		grid.Objects = nil
-		st := streamType()
+		v.grid.Layout = container.NewGridWithColumns(cols).Layout
+		v.grid.Objects = nil
+		st := "Main"
+		if streamSel.SelectedIndex() == 1 {
+			st = "Extra1"
+		}
 		for _, ch := range chans {
 			img := canvas.NewImageFromImage(nil)
 			img.FillMode = canvas.ImageFillContain
@@ -225,20 +294,30 @@ func main() {
 			lbl := canvas.NewText(fmt.Sprintf(" CH %d ", ch), theme.Color(theme.ColorNameForeground))
 			lbl.TextSize = 12
 			tile := container.NewStack(img, container.NewVBox(lbl, layoutSpacer()))
-			grid.Add(tile)
+			v.grid.Add(tile)
 			go runTile(p, ch, st, img, myStop)
 		}
-		grid.Refresh()
+		v.grid.Refresh()
 
 		// 연결하면 좌측 바 자동 축소
 		setPanel(false)
-		status.SetText(fmt.Sprintf("%d개 채널 · %s · GPU 디코드", len(chans), st))
+		v.setStatus("status.streaming", len(chans), st)
 	}
 
-	saveBtn := widget.NewButton("저장", func() {
+	connect := func() {
+		if strings.TrimSpace(host.Text) == "" {
+			v.setStatus("status.needHost")
+			return
+		}
+		// ffmpeg 없이 연결하면 화면이 영원히 비어 있으므로 먼저 확보한다.
+		// 설치 중에 언어를 바꿔 화면이 다시 만들어져도 최신 startStreams 를 부른다.
+		v.ensureFFmpeg(func() { v.startStreams() })
+	}
+
+	saveBtn := widget.NewButton(T("btn.save"), func() {
 		p := curProfile()
 		if p.Name == "" || p.Host == "" {
-			status.SetText("이름과 주소를 입력하세요")
+			v.setStatus("status.needNameHost")
 			return
 		}
 		ps := loadProfiles()
@@ -255,35 +334,99 @@ func main() {
 		sort.Slice(ps, func(i, j int) bool { return ps[i].Name < ps[j].Name })
 		saveProfiles(ps)
 		refreshSaved()
-		status.SetText("저장됨: " + p.Name)
+		v.savedName = p.Name
+		savedSel.Selected = p.Name
+		savedSel.Refresh()
+		v.setStatus("status.saved", p.Name)
 	})
-	connectBtn := widget.NewButton("연결", connect)
+	connectBtn := widget.NewButton(T("btn.connect"), connect)
 	connectBtn.Importance = widget.HighImportance
 
 	leftPanel = container.NewVBox(form, container.NewHBox(connectBtn, saveBtn))
-	topBar := container.NewHBox(toggleBtn, status)
+	setPanel(!v.panelHidden)
+	topBar := container.NewBorder(nil, nil, toggleBtn, prefsBtn, v.status)
 
-	refreshSaved()
-	if ps := loadProfiles(); len(ps) > 0 {
-		fillForm(ps[0])
-		savedSel.SetSelected(ps[0].Name)
+	v.w.SetContent(container.NewBorder(topBar, nil, leftPanel, nil, v.grid))
+}
+
+// showPrefs 는 언어·화면 모드 설정 창을 띄운다. 바꾸면 즉시 적용·저장된다.
+func (v *viewer) showPrefs() {
+	var dlg dialog.Dialog
+
+	// 언어: 0 = 시스템, 1.. = languages
+	langOpts := []string{T("prefs.system")}
+	langIdx := 0
+	for i, l := range languages {
+		langOpts = append(langOpts, l.name)
+		if l.code == v.cfg.Lang {
+			langIdx = i + 1
+		}
+	}
+	langSel := widget.NewSelect(langOpts, nil)
+	langSel.SetSelectedIndex(langIdx)
+	langSel.OnChanged = func(string) {
+		code := ""
+		if i := langSel.SelectedIndex(); i > 0 {
+			code = languages[i-1].code
+		}
+		if code == v.cfg.Lang {
+			return
+		}
+		v.cfg.Lang = code
+		saveSettings(v.cfg)
+		setLanguage(code)
+		dlg.Hide()
+		v.build()
+		v.showPrefs() // 새 언어로 다시 띄운다
 	}
 
-	// ffmpeg 가 없으면 연결을 눌렀을 때 자동 설치를 제안하므로, 미리 알려만 둔다.
-	if core.HaveFFmpeg() {
-		status.SetText("대기 중")
-	} else if core.FFmpegInstallable() {
-		status.SetText("대기 중 — 연결 시 ffmpeg 를 자동 설치합니다")
-	} else {
-		status.SetText("대기 중 — ffmpeg 필요: " + core.FFmpegManualHint())
+	// 화면 모드
+	themeCodes := []string{"", "light", "dark"}
+	themeOpts := []string{T("prefs.system"), T("theme.light"), T("theme.dark")}
+	radio := widget.NewRadioGroup(themeOpts, nil)
+	radio.Required = true
+	for i, c := range themeCodes {
+		if c == v.cfg.Theme {
+			radio.SetSelected(themeOpts[i])
+		}
+	}
+	radio.OnChanged = func(sel string) {
+		for i, o := range themeOpts {
+			if o == sel && themeCodes[i] != v.cfg.Theme {
+				v.cfg.Theme = themeCodes[i]
+				saveSettings(v.cfg)
+				v.a.Settings().SetTheme(&appTheme{mode: v.cfg.Theme})
+			}
+		}
 	}
 
-	content := container.NewBorder(topBar, nil, leftPanel, nil, grid)
-	w.SetContent(content)
-	w.ShowAndRun()
+	content := widget.NewForm(
+		widget.NewFormItem(T("prefs.language"), langSel),
+		widget.NewFormItem(T("prefs.theme"), radio),
+	)
+	dlg = dialog.NewCustom(T("prefs.title"), T("btn.close"), content, v.w)
+	dlg.Show()
 }
 
 func layoutSpacer() fyne.CanvasObject { return canvas.NewRectangle(nil) }
+
+// manualHint 는 자동 설치가 불가능할 때 보여줄 수동 설치 안내다(번역 대기 상태).
+func manualHint() msg {
+	switch runtime.GOOS {
+	case "darwin":
+		return m("hint.mac")
+	case "linux":
+		return m("hint.linux")
+	default:
+		return m("hint.other")
+	}
+}
+
+// showMessage 는 확인 버튼 하나짜리 안내 창이다.
+// Fyne 기본 대화상자는 한국어·일본어 버튼 문구가 없어서 직접 만든다.
+func (v *viewer) showMessage(title, body string) {
+	dialog.NewCustom(title, T("btn.ok"), widget.NewLabel(body), v.w).Show()
+}
 
 // ensureFFmpeg 는 ffmpeg 가 준비됐는지 확인하고, 없으면 자동 설치를 제안한다.
 // 준비가 끝나면 onReady 를 호출한다. 준비되지 않으면 호출하지 않는다.
@@ -291,41 +434,36 @@ func layoutSpacer() fyne.CanvasObject { return canvas.NewRectangle(nil) }
 // ffmpeg 는 라이선스 때문에 동봉할 수 없어 처음 한 번만 내려받는다.
 // 인터넷에서 실행파일을 받아오는 일이므로 사용자에게 출처와 크기를 보여주고
 // 동의를 받은 뒤에만 진행한다(자동으로 몰래 받지 않는다).
-func ensureFFmpeg(w fyne.Window, status *widget.Label, onReady func()) {
+func (v *viewer) ensureFFmpeg(onReady func()) {
 	if core.HaveFFmpeg() {
 		onReady()
 		return
 	}
 
 	if !core.FFmpegInstallable() {
-		dialog.ShowInformation("ffmpeg 필요",
-			"영상 디코딩에 ffmpeg 가 필요합니다.\n\n"+core.FFmpegManualHint(), w)
-		status.SetText("ffmpeg 없음 — " + core.FFmpegManualHint())
+		v.showMessage(T("ff.needTitle"), T("ff.needBody", manualHint()))
+		v.setStatus("status.noFF", manualHint())
 		return
 	}
 
 	origin, size, _ := core.FFmpegInstallInfo()
-	msg := fmt.Sprintf(
-		"영상 디코딩에 ffmpeg 가 필요하지만 설치돼 있지 않습니다.\n\n"+
-			"지금 자동으로 받아올까요?\n\n"+
-			"출처: %s\n크기: %s (처음 한 번만)\n내려받은 파일은 SHA-256 으로 검증합니다.",
-		origin, core.HumanSize(size))
-
-	dialog.ShowConfirm("ffmpeg 자동 설치", msg, func(ok bool) {
-		if !ok {
-			status.SetText("ffmpeg 없음 — 설치해야 영상이 나옵니다")
-			return
-		}
-		runFFmpegInstall(w, status, onReady)
-	}, w)
+	body := widget.NewLabel(T("ff.installBody", origin, core.HumanSize(size)))
+	dialog.NewCustomConfirm(T("ff.installTitle"), T("btn.install"), T("btn.cancel"), body,
+		func(ok bool) {
+			if !ok {
+				v.setStatus("status.declined")
+				return
+			}
+			v.runFFmpegInstall(onReady)
+		}, v.w).Show()
 }
 
 // runFFmpegInstall 은 진행률 창을 띄우고 백그라운드에서 설치한다.
-func runFFmpegInstall(w fyne.Window, status *widget.Label, onReady func()) {
+func (v *viewer) runFFmpegInstall(onReady func()) {
 	bar := widget.NewProgressBar()
-	phase := widget.NewLabel("시작 중…")
-	prog := dialog.NewCustomWithoutButtons("ffmpeg 설치 중",
-		container.NewVBox(phase, bar), w)
+	phase := widget.NewLabel(T("ff.starting"))
+	prog := dialog.NewCustomWithoutButtons(T("ff.progressTitle"),
+		container.NewVBox(phase, bar), v.w)
 	prog.Show()
 
 	go func() {
@@ -333,7 +471,7 @@ func runFFmpegInstall(w fyne.Window, status *widget.Label, onReady func()) {
 			// UI 갱신은 메인 스레드에서만 해야 한다.
 			fyne.Do(func() {
 				phase.SetText(fmt.Sprintf("%s  %s / %s",
-					ph, core.HumanSize(done), core.HumanSize(total)))
+					T("phase."+ph), core.HumanSize(done), core.HumanSize(total)))
 				if total > 0 {
 					bar.SetValue(float64(done) / float64(total))
 				}
@@ -343,14 +481,14 @@ func runFFmpegInstall(w fyne.Window, status *widget.Label, onReady func()) {
 		fyne.Do(func() {
 			prog.Hide()
 			if err != nil {
-				dialog.ShowError(
-					fmt.Errorf("ffmpeg 설치 실패: %w\n\n수동 설치: %s", err, core.FFmpegManualHint()), w)
-				status.SetText("ffmpeg 설치 실패")
+				// 세부 오류(err)는 core 가 만든 기술 메시지라 번역하지 않는다.
+				v.showMessage(T("ff.failTitle"), T("ff.failBody", err.Error(), manualHint()))
+				v.setStatus("ff.failTitle")
 				return
 			}
 			// 설치된 경로를 쓰도록 도구 경로를 다시 해석한다.
 			core.ResolveTools()
-			status.SetText("ffmpeg 설치 완료")
+			v.setStatus("status.installed")
 			onReady()
 		})
 	}()
@@ -370,13 +508,13 @@ func runTile(p profile, ch int, st string, img *canvas.Image, stop <-chan struct
 		if busy.Load() {
 			return // 이전 프레임 아직 그리는 중 → 건너뜀
 		}
-		m, _, derr := image.Decode(bytes.NewReader(jpg))
+		frame, _, derr := image.Decode(bytes.NewReader(jpg))
 		if derr != nil {
 			return
 		}
 		busy.Store(true)
 		fyne.Do(func() {
-			img.Image = m
+			img.Image = frame
 			img.Refresh()
 			busy.Store(false)
 		})

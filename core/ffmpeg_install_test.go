@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -88,12 +89,12 @@ func TestInstallExtractsEntryWhenChecksumMatches(t *testing.T) {
 	if string(data) != "FAKE-FFMPEG-BINARY" {
 		t.Errorf("내용 = %q", data)
 	}
-	// 실행 권한이 있어야 한다.
+	// 실행 권한이 있어야 한다(Windows 에는 실행 비트가 없어 Go 가 항상 0 으로 보고하므로 건너뛴다).
 	st, err := os.Stat(got)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Mode().Perm()&0o111 == 0 {
+	if runtime.GOOS != "windows" && st.Mode().Perm()&0o111 == 0 {
 		t.Errorf("실행 권한 없음: %v", st.Mode())
 	}
 	if len(phases) == 0 {
