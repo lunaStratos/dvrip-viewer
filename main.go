@@ -32,7 +32,7 @@ import (
 	"xmview/core"
 )
 
-//go:embed icon.png
+//go:embed img/icon.png
 var iconPNG []byte
 
 type profile struct {

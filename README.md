@@ -7,6 +7,8 @@ Xiongmai(XM) 계열 DVR/NVR/IPC(미라클·XMEye·이지피스 등)에 **DVRIP �
 
 화면 흐름: **로그인 폼 → 저장 → 2×2 분할 영상**(전부 창 하나 안, 네이티브 위젯).
 
+![XMView 실행 화면 — 접속 폼과 2×2 분할 4채널 영상](img/main.png)
+
 ## GPU 하드웨어 가속
 무거운 작업은 **HEVC(H.265) 디코딩**이며, ffmpeg 하드웨어 디코더로 **GPU에서 처리**한다
 (`-hwaccel auto` → macOS **VideoToolbox**, Windows **D3D11VA/DXVA2**, 없으면 소프트웨어 폴백).
@@ -66,7 +68,11 @@ ffmpeg.exe 는 PATH 또는 실행파일과 같은 폴더에 둔다.
 ## 프로젝트 구조
 ```
 main.go            네이티브 GUI 앱(Fyne) — 로그인 폼 + 2×2 그리드
-icon.png           앱 아이콘(빌드 시 .icns 로 변환)
+img/icon.png       앱 아이콘(macOS .icns · Windows exe 아이콘의 원본)
+winres/make.ps1    img/icon.png → rsrc_windows_amd64.syso (exe 아이콘, 아이콘 변경 시 재실행)
+i18n.go            화면 문구 번역(한국어/English/日本語/简体中文)
+theme.go           글꼴(맑은 고딕)·라이트/다크 테마
+settings.go        환경설정 저장(settings.json)
 build.sh           macOS .app 빌드 스크립트
 core/
   protocol.go      DVRIP 프로토콜(로그인·KeepAlive·모니터·프레임 디먹스)

@@ -14,7 +14,7 @@ cp dist/xmview-native-mac-arm64 "$APP/Contents/MacOS/xmview"
 echo "== 아이콘(.icns) 생성 =="
 ICONSET=$(mktemp -d)/XMView.iconset; mkdir -p "$ICONSET"
 for s in 16 32 64 128 256 512; do
-  sips -z $s $s icon.png --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+  sips -z $s $s img/icon.png --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
 done
 cp "$ICONSET/icon_32x32.png"   "$ICONSET/icon_16x16@2x.png"
 cp "$ICONSET/icon_64x64.png"   "$ICONSET/icon_32x32@2x.png"
