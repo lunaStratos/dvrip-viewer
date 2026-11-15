@@ -49,7 +49,10 @@ jobs:
 
   macos:
     name: macOS (Apple Silicon)
-    runs-on: macos-14
+    # 버전을 고정하면(예: macos-14) GitHub 가 그 이미지를 폐기할 때 러너가 배정되지
+    # 않아 잡이 즉시 cancelled 된다. macos-latest 는 현재 기본 이미지를 따라가며
+    # macos-14 이후로 Apple Silicon(arm64) 이다.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
