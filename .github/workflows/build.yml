@@ -105,10 +105,10 @@ jobs:
             **macOS (Apple Silicon)**: `XMView-macos-arm64.zip` 을 풀고 `XMView-Native.app` 을 실행합니다.
             처음 실행 시 Gatekeeper 경고가 뜨면 우클릭 → 열기 를 선택하세요.
 
-            ## 사전 요구: ffmpeg
+            ## ffmpeg
 
-            영상 디코딩에 `ffmpeg` 가 필요합니다. 라이선스 문제로 번들하지 않습니다.
+            영상 디코딩에 `ffmpeg` 가 필요합니다. 라이선스 문제로 앱에 동봉하지 않습니다.
 
-            - Windows: [gyan.dev full 빌드](https://www.gyan.dev/ffmpeg/builds/)를 PATH 에 넣거나
-              `ffmpeg.exe` 를 `XMView.exe` 와 같은 폴더에 둡니다.
-            - macOS: `brew install ffmpeg`
+            - **Windows: 따로 설치할 필요 없습니다.** 처음 **연결** 을 누르면 출처·크기를 보여주고
+              동의를 받은 뒤 자동으로 내려받습니다(SHA-256 검증, `%AppData%\xmview\bin` 에 설치).
+            - **macOS**: `brew install ffmpeg`

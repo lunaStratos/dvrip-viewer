@@ -49,7 +49,7 @@ ffmpeg 를 앱에 동봉하지 않는 이유는 라이선스(GPL/LGPL)다. 런�
 
 **직접 빌드** — 윈도우 PC 에서(CGO + OpenGL 필요):
 ```bat
-: Go 와 TDM-GCC(또는 MSYS2 mingw) 설치 후
+: Go 와 mingw-w64 gcc(WinLibs / TDM-GCC / MSYS2) 설치 후
 set CGO_ENABLED=1
 go build -ldflags "-H=windowsgui -s -w" -o XMView.exe .
 ```
@@ -57,7 +57,7 @@ Fyne 가 CGO 를 쓰므로 맥에서 `GOOS=windows` 만으로는 크로스컴파
 윈도우용 C 컴파일러(mingw-w64)가 있으면 맥에서도 가능하지만, 위의 Actions 쪽이 확실하다.
 
 접속정보 저장 위치: `%AppData%\xmview\connections.json`
-ffmpeg.exe 는 PATH 또는 실행파일과 같은 폴더에 둔다.
+ffmpeg 는 처음 연결할 때 자동으로 설치된다(위 "ffmpeg 자동 설치" 참고).
 
 ## 사용법
 1. 앱 실행 → 좌측 폼에 **주소 / 포트 / 아이디 / 비밀번호 / 채널** 입력
